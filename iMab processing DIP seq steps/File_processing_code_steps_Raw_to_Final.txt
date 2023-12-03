@@ -1,0 +1,37 @@
+# ALL PROCESSING of DIP MCF7, HEK, U2OS with local alligment
+
+# trim_galore (Cutadapt version: 3.5) adapters from merged samples of biological replicates paired reads: Read1 = R1, Read2 = R2
+trim_galore --paired --fastqc $path/$sample_R1.fastq.gz $path/$sample_R2.fastq.gz -o $path/trimgalore 
+
+# Pair-end allignement (Bowtie 2 version 2.4.5) to reference hg19 paired reads: Read1 = R1_val1, Read2 = R2_val2
+bowtie2 -p 4 --local -x $path_to_ref_genome/hg19 -1 $path/trimgalore/$sample_R1_val_1.fq.gz -2 $path/trimgalore/$sample_R2_val_2.fq.gz -S $path/$sample_name.sam 
+
+# aligned text file to binary (samtools version: 1.10 (using htslib 1.10.2))
+samtools view -S -@ 6 -b $path/$sample_name.sam > $path/$sample_name.bam 
+
+# name sort (samtools version: 1.10 (using htslib 1.10.2))
+samtools sort -n -@ 3 -o $path/$sample_nsorted.bam $path/$sample.bam 
+
+# fixmates to mark duplicates (samtools version: 1.10 (using htslib 1.10.2))
+samtools fixmate -@ 2 $path/$sample_nsorted.bam $path/$sample_nsorted_fix.bam 
+
+# coordinate sort again to mark duplicates(samtools version: 1.10 (using htslib 1.10.2))
+samtools sort -@ 2 $path/$sample_nsorted_fix.bam -o $path/$sample_sorted.bam 
+
+# mark duplicates using picard MarkDuplicates (picard version:2.25.6)
+picard MarkDuplicates I= $path/$sample_sorted.bam O= $path/$sample_sorted_dupmrkd.bam ASSUME_SORT_ORDER=coordinate M= $sample_sorted_dupmrkd_metrics.txt USE_JDK_DEFLATER=true USE_JDK_INFLATER=true 
+
+# delete blacklist regions from ENCONDE ChIP using bedtools intersection tool (Version: v2.30.0)
+bedtools intersect -v -a $path/$sample_sorted_dupmrkd.bam -b $path_to_blacklist_reference_bed/hg19-blacklist.v2.bed > $path/$sample_sorted_dupmrkd_fil.bam 
+
+# index the filtered fam files again (samtools version: 1.10 (using htslib 1.10.2))
+samtools index -@ 6 $path/$sample_sorted_dupmrkd_fil.bam 
+
+# Big Wig for visual using deeptools BamCoverage (deeptools version: 3.5.1)
+bamCoverage --bam $path/$sample_sorted_dupmrkd_fil.bam -o $path/$sample_sorted_dupmrkd_normalized.bw -bs 10 -p 6  --normalizeUsing CPM 
+
+# MACS peak calling (MACS2 2.2.7.1), -t is treatment sample and -c control as the INPUT of that biological sample up to this point all samples are processed using the same steps
+macs2 callpeak -t $path/sample_sorted_dupmrkd_fil.bam -c $path/sample_INPUT_sorted_dupmrkd_fil.bam -f BAM -g hs --outdir /Volumes/$path/MACS -n $PEAK_SAMPLE_NAME &
+
+# Peak files merging and intersection was done using bedops (version: 2.4.39) 
+bedops --intersect $sample_1.narrowPeak $sample_2.narrowPeak > $file_1_2_intersect_peaks.bed
